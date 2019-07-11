@@ -1,0 +1,6 @@
+
+
+Program Arguments : Input.wav Output.wav -9
+
+Cache Configuration Options...
+Performance Modelling : Disabled
