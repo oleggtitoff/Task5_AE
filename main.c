@@ -54,13 +54,13 @@ static inline ae_f32x2 int16ToF32x2(int16_t x, int16_t y);
 static inline ae_f32x2 int32ToF32x2(int32_t x, int32_t y);
 static inline ae_f64 uint32ToF64(uint32_t x);
 static inline F64x2 putF64ToF64x2(ae_f64 h, ae_f64 l);
-static inline ae_f32x2 roundF64x2ToF32x2(F64x2 x);
-static inline ae_f16x4 roundF64x2ToF16x4(F64x2 x);
+static inline ae_f64 LeftShiftA(ae_f64 x, uint8_t shift);
+static inline ae_f64 RightShiftA(ae_f64 x, uint8_t shift);
 static inline F64x2 Mul(ae_f32x2 x, ae_f32x2 y);
 static inline F64x2 Mac(F64x2 acc, ae_f32x2 x, ae_f32x2 y);
 static inline F64x2 MSub(F64x2 acc, ae_f32x2 x, ae_f32x2 y);
 
-int32_t doubleToFixed30(double x);
+int32_t doubleToFixed31(double x);
 
 FILE * openFile(char *fileName, _Bool mode);		//if 0 - read, if 1 - write
 void readHeader(uint8_t *headerBuff, FILE *inputFilePtr);
@@ -123,14 +123,14 @@ static inline F64x2 putF64ToF64x2(ae_f64 h, ae_f64 l)
 	return res;
 }
 
-static inline ae_f32x2 roundF64x2ToF32x2(F64x2 x)
+static inline ae_f64 LeftShiftA(ae_f64 x, uint8_t shift)
 {
-	return AE_ROUND32X2F64SSYM(x.h, x.l);
+	return AE_SLAA64S(x, shift);
 }
 
-static inline ae_f16x4 roundF64x2ToF16x4(F64x2 x)
+static inline ae_f64 RightShiftA(ae_f64 x, uint8_t shift)
 {
-	return AE_ROUND16X4F32SSYM(0, roundF64x2ToF32x2(x) << 1);
+	return AE_SRAA64(x, shift);
 }
 
 static inline F64x2 Mul(ae_f32x2 x, ae_f32x2 y)
@@ -160,18 +160,18 @@ static inline F64x2 MSub(F64x2 acc, ae_f32x2 x, ae_f32x2 y)
 	return acc;
 }
 
-int32_t doubleToFixed30(double x)
+int32_t doubleToFixed31(double x)
 {
-	if (x >= 2)
+	if (x >= 1)
 	{
 		return INT32_MAX;
 	}
-	else if (x < -2)
+	else if (x < -1)
 	{
 		return INT32_MIN;
 	}
 
-	return (int32_t)(x * (double)(1LL << 30));
+	return (int32_t)(x * (double)(1LL << 31));
 }
 
 FILE * openFile(char *fileName, _Bool mode)		//if 0 - read, if 1 - write
@@ -245,11 +245,11 @@ void calculateBiquadCoeffs(BiquadCoeffs *coeffs, double Fc, double Q)
 	coeffs->da[0] = 2 * (K * K - 1) * norm;
 	coeffs->da[1] = (1 - K / Q + K * K) * norm;
 
-	coeffs->b[0] = doubleToFixed30(coeffs->db[0]);
-	coeffs->b[1] = doubleToFixed30(coeffs->db[1]);
+	coeffs->b[0] = doubleToFixed31(coeffs->db[0] / 2);
+	coeffs->b[1] = doubleToFixed31(coeffs->db[1] / 2);
 	coeffs->b[2] = coeffs->b[0];
-	coeffs->a[0] = doubleToFixed30(coeffs->da[0]);
-	coeffs->a[1] = doubleToFixed30(coeffs->da[1]);
+	coeffs->a[0] = doubleToFixed31(coeffs->da[0] / 2);
+	coeffs->a[1] = doubleToFixed31(coeffs->da[1] / 2);
 }
 
 int16_t biquadDoubleFilter(int16_t sample, BiquadBuff *buff, BiquadCoeffs *coeffs)
@@ -303,13 +303,12 @@ void filterSignalIntr(size_t size, BiquadBuff *buff, BiquadCoeffs *coeffs)
 	ae_f32x2 coef5 = int32ToF32x2(coeffs->a[1], coeffs->a[1]);
 	ae_f32x2 buffTmp;
 	F64x2 acc;
-	ae_f16x4 round;
 
 	for (i = 0; i < size / CHANNELS; i++)
 	{
 		acc = putF64ToF64x2(
-				AE_SLAI64(uint32ToF64(buff[0].remainder), 16),
-				AE_SLAI64(uint32ToF64(buff[1].remainder), 16)
+				LeftShiftA(uint32ToF64(buff[0].remainder), 15),
+				LeftShiftA(uint32ToF64(buff[1].remainder), 15)
 				);
 
 		buffTmp = int16ToF32x2(dataBuff[i * CHANNELS], dataBuff[i * CHANNELS + 1]);
@@ -327,6 +326,9 @@ void filterSignalIntr(size_t size, BiquadBuff *buff, BiquadCoeffs *coeffs)
 		buffTmp = int16ToF32x2(buff[0].x[1], buff[1].x[1]);
 		acc = Mac(acc, coef3, buffTmp);
 
+		acc.h = LeftShiftA(acc.h, 1);
+		acc.l = LeftShiftA(acc.l, 1);
+
 		buff[0].x[1] = buff[0].x[0];
 		buff[0].x[0] = dataBuff[i * CHANNELS];
 		buff[0].y[1] = buff[0].y[0];
@@ -335,15 +337,14 @@ void filterSignalIntr(size_t size, BiquadBuff *buff, BiquadCoeffs *coeffs)
 		buff[1].x[0] = dataBuff[i * CHANNELS + 1];
 		buff[1].y[1] = buff[1].y[0];
 
-		round = roundF64x2ToF16x4(acc);
-		dataBuff[i * CHANNELS] = AE_MOVAD16_1(round);
-		dataBuff[i * CHANNELS + 1] = AE_MOVAD16_0(round);
+		dataBuff[i * CHANNELS] = AE_MOVAD16_3(AE_MOVF16X4_FROMF64(acc.h));
+		dataBuff[i * CHANNELS + 1] = AE_MOVAD16_3(AE_MOVF16X4_FROMF64(acc.l));
 
 		buff[0].y[0] = dataBuff[i * CHANNELS];
 		buff[1].y[0] = dataBuff[i * CHANNELS + 1];
 
-		buff[0].remainder = ((uint32_t)AE_MOVAD32_L(AE_MOVINT32X2_FROMF64(AE_SRAI64(acc.h, 16))));
-		buff[1].remainder = (uint32_t)AE_MOVAD32_L(AE_MOVINT32X2_FROMF64(AE_SRAI64(acc.l, 16)));
+		buff[0].remainder = (uint32_t)AE_MOVAD32_L(AE_MOVINT32X2_FROMF64(RightShiftA(acc.h, 16)));
+		buff[1].remainder = (uint32_t)AE_MOVAD32_H(AE_MOVINT32X2_FROMF64(RightShiftA(acc.l, 16)));
 	}
 }
 
