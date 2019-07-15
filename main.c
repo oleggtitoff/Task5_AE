@@ -351,7 +351,6 @@ void filterSignalIntr(size_t size, BiquadBuff *buff, BiquadCoeffs *coeffs)
 void run(FILE *inputFilePtr, FILE *outputFilePtr, BiquadBuff *buff, BiquadCoeffs *coeffs)
 {
 	size_t samplesRead;
-	uint32_t i;
 
 	while (1)
 	{
